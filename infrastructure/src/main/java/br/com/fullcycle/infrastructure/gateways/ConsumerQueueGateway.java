@@ -1,6 +1,8 @@
 package br.com.fullcycle.infrastructure.gateways;
 
+import br.com.fullcycle.application.ticket.CancelEventTicketsUseCase;
 import br.com.fullcycle.application.ticket.CreateTicketForCustomerUseCase;
+import br.com.fullcycle.domain.event.EventCancelled;
 import br.com.fullcycle.domain.event.EventTicketReserved;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -13,10 +15,16 @@ import java.util.Objects;
 public class ConsumerQueueGateway implements QueueGateway {
 
     private final CreateTicketForCustomerUseCase createTicketForCustomerUseCase;
+    private final CancelEventTicketsUseCase cancelEventTicketsUseCase;
     private final ObjectMapper mapper;
 
-    public ConsumerQueueGateway(final CreateTicketForCustomerUseCase createTicketForCustomerUseCase, final ObjectMapper mapper) {
+    public ConsumerQueueGateway(
+            final CreateTicketForCustomerUseCase createTicketForCustomerUseCase,
+            final CancelEventTicketsUseCase cancelEventTicketsUseCase,
+            final ObjectMapper mapper
+    ) {
         this.createTicketForCustomerUseCase = Objects.requireNonNull(createTicketForCustomerUseCase);
+        this.cancelEventTicketsUseCase = Objects.requireNonNull(cancelEventTicketsUseCase);
         this.mapper = Objects.requireNonNull(mapper);
     }
 
@@ -31,11 +39,21 @@ public class ConsumerQueueGateway implements QueueGateway {
             final var dto = safeRead(content, EventTicketReserved.class);
             this.createTicketForCustomerUseCase.execute(new CreateTicketForCustomerUseCase.Input(dto.eventTicketId(), dto.eventId(), dto.customerId()));
         }
+
+        if (content.contains("event.cancelled")) {
+            final var dto = safeRead(content, EventCancelled.class);
+            this.cancelEventTicketsUseCase.execute(new CancelEventTicketsUseCase.Input(dto.eventId()));
+        }
     }
 
     private <T> T safeRead(final String content, final Class<T> tClass) {
         try {
-            return this.mapper.readValue(content, tClass);
+            final var node = this.mapper.readTree(content);
+            // H2 devolve a coluna JSON da outbox como string JSON (conteúdo entre aspas), o MySQL devolve o objeto.
+            if (node.isTextual()) {
+                return this.mapper.readValue(node.asText(), tClass);
+            }
+            return this.mapper.treeToValue(node, tClass);
         } catch (JsonProcessingException e) {
             throw new RuntimeException(e);
         }
